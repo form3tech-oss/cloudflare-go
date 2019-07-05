@@ -114,6 +114,24 @@ const (
   "errors": [],
   "messages": []
 }`
+	listWorkerBindings = `
+{
+	"success": true,
+	"errors": [],
+	"messages": [],
+	"result": [
+		{
+			"name": "myBinding",
+			"type": "wasm_module"
+		},
+		{
+			"name": "myKV",
+			"type": "kv_namespace",
+			"namespace_id": "abcdef0123"
+		}
+	]
+}
+`
 )
 
 var (
@@ -626,6 +644,76 @@ func TestWorkers_UpdateWorkerRouteSingleScriptWithOrg(t *testing.T) {
 
 }
 
+func TestAPI_ListWorkerBindingsNoOrg(t *testing.T) {
+	setup()
+	defer teardown()
+
+	_, err := client.ListWorkerBindings("bar", "")
+	assert.Error(t, err)
+}
+
+func TestAPI_ListWorkerBindingsWithOrg(t *testing.T) {
+	setup(UsingOrganization("foo"))
+	defer teardown()
+
+	mux.HandleFunc("/accounts/foo/workers/scripts/bar/bindings", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application-json")
+		fmt.Fprintf(w, listWorkerBindings)
+	})
+	actual, err := client.ListWorkerBindings("bar", "")
+	expected := WorkerBindingsResponse{
+		successResponse,
+		WorkerResourceBindings{
+			KVBindings: []*WorkerKVBinding{
+				{
+					Name:        "myKV",
+					NamespaceID: "abcdef0123",
+				},
+			},
+			WASMBindings: []*WorkerWASMBinding{
+				{
+					Name: "myBinding",
+				},
+			},
+		},
+	}
+	if assert.NoError(t, err) {
+		assert.Equal(t, expected, actual)
+	}
+}
+
+func TestAPI_ListWorkerBindingsWithZone(t *testing.T) {
+	setup()
+	defer teardown()
+
+	mux.HandleFunc("/zones/foo/workers/script/bindings", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application-json")
+		fmt.Fprintf(w, listWorkerBindings)
+	})
+	actual, err := client.ListWorkerBindings("", "foo")
+	expected := WorkerBindingsResponse{
+		successResponse,
+		WorkerResourceBindings{
+			KVBindings: []*WorkerKVBinding{
+				{
+					Name:        "myKV",
+					NamespaceID: "abcdef0123",
+				},
+			},
+			WASMBindings: []*WorkerWASMBinding{
+				{
+					Name: "myBinding",
+				},
+			},
+		},
+	}
+	if assert.NoError(t, err) {
+		assert.Equal(t, expected, actual)
+	}
+}
+
 func TestWorkerResourceBindings_MarshalJSON_Happy(t *testing.T) {
 	bindings := &WorkerResourceBindings{
 		KVBindings: []*WorkerKVBinding{
@@ -679,4 +767,32 @@ func TestWorkerResourceBindings_MarshalJSON_Nils(t *testing.T) {
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, string(res))
 	}
+}
+
+func TestWorkerBindingsResponse_UnmarshalJSON(t *testing.T) {
+	var r WorkerBindingsResponse
+	res := []byte(`
+{
+	"success": true,
+	"errors": [],
+	"messages": [],
+	"result": [
+		{
+			"name": "myBinding",
+			"type": "wasm_module"
+		}
+	]
+}`)
+	assert.Nil(t, json.Unmarshal(res, &r))
+	assert.Equal(t, 1, len(r.Result.WASMBindings))
+	assert.Equal(t, 0, len(r.Result.KVBindings))
+	assert.Equal(t, "myBinding", r.Result.WASMBindings[0].Name)
+
+	r = WorkerBindingsResponse{}
+	res = []byte(listWorkerBindings)
+	assert.Nil(t, json.Unmarshal(res, &r))
+	assert.Equal(t, 1, len(r.Result.WASMBindings))
+	assert.Equal(t, 1, len(r.Result.KVBindings))
+	assert.Equal(t, "myBinding", r.Result.WASMBindings[0].Name)
+	assert.Equal(t, "myKV", r.Result.KVBindings[0].Name)
 }
