@@ -68,6 +68,12 @@ type WorkerScriptResponse struct {
 	WorkerScript `json:"result"`
 }
 
+// WorkerBindingsResponse is an API response for list bindings call
+type WorkerBindingsResponse struct {
+	Response
+	Result WorkerResourceBindings `json:"result"`
+}
+
 // WorkerResourceBindings defines lists of resources to bind to a worker script using the Resource Binding API
 //
 // API reference: https://developers.cloudflare.com/workers/api/resource-bindings/
@@ -105,6 +111,39 @@ func (w *WorkerResourceBindings) MarshalJSON() ([]byte, error) {
 		BodyPart string          `json:"body_part"`
 		Bindings json.RawMessage `json:"bindings"`
 	}{"script", b})
+}
+
+// UnmarshalJSON is a custom JSON unmarshal method
+func (w *WorkerResourceBindings) UnmarshalJSON(data []byte) error {
+	var tmp []map[string]string
+	var kv []*WorkerKVBinding
+	var wasm []*WorkerWASMBinding
+
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	for _, r := range tmp {
+		if resType, ok := r["type"]; ok {
+			switch resType {
+			case "wasm_module":
+				if name, ok := r["name"]; ok {
+					wasm = append(wasm, &WorkerWASMBinding{Name: name})
+				}
+			case "kv_namespace":
+				kvBinding := &WorkerKVBinding{}
+				if name, ok := r["name"]; ok {
+					kvBinding.Name = name
+				}
+				if id, ok := r["namespace_id"]; ok {
+					kvBinding.NamespaceID = id
+					kv = append(kv, kvBinding)
+				}
+			}
+		}
+	}
+	w.KVBindings = kv
+	w.WASMBindings = wasm
+	return nil
 }
 
 // WorkerKVBinding defines the binding between a variable name and a KV namespace
@@ -477,6 +516,30 @@ func (api *API) UpdateWorkerRoute(zoneID string, routeID string, route WorkerRou
 	err = json.Unmarshal(res, &r)
 	if err != nil {
 		return WorkerRouteResponse{}, errors.Wrap(err, errUnmarshalError)
+	}
+	return r, nil
+}
+
+// ListWorkerBindings lists resource bindings for a zone or by script name (enterprise only)
+// Specify either a script name for enterprise accounts or a zone id for standard accounts
+//
+// API reference: https://workers.cloudflare.com/docs/reference/tooling/api/bindings
+func (api *API) ListWorkerBindings(scriptName, zoneID string) (WorkerBindingsResponse, error) {
+	uri := "/zones/" + zoneID + "/workers/script/bindings"
+	if scriptName != "" {
+		if api.OrganizationID == "" {
+			return WorkerBindingsResponse{}, errors.New("organization ID required for enterprise only request")
+		}
+		uri = "/accounts/" + api.OrganizationID + "/workers/scripts/" + scriptName + "/bindings"
+	}
+	res, err := api.makeRequest("GET", uri, nil)
+	if err != nil {
+		return WorkerBindingsResponse{}, errors.Wrap(err, errMakeRequestError)
+	}
+	var r WorkerBindingsResponse
+	err = json.Unmarshal(res, &r)
+	if err != nil {
+		return WorkerBindingsResponse{}, errors.Wrap(err, errUnmarshalError)
 	}
 	return r, nil
 }
